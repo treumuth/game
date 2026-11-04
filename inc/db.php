@@ -10,27 +10,32 @@ function db() {
     if (!extension_loaded('pdo_sqlite')) throw new Exception('Serveris puudub PHP laiendus pdo_sqlite (paigalda nt php-sqlite3).');
     if (!is_dir(DATA_DIR)) @mkdir(DATA_DIR, 0775, true);
     if (!is_writable(DATA_DIR)) throw new Exception('Kaust "game/data" peab olema veebiserverile kirjutatav (nt chmod 775 või 777).');
-    $new = !file_exists(DB_FILE);
+    $new = !file_exists(DB_FILE) || filesize(DB_FILE) === 0;
     $pdo = new PDO('sqlite:' . DB_FILE);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     $pdo->exec('PRAGMA busy_timeout = 6000');
-    try { $pdo->exec('PRAGMA journal_mode = WAL'); } catch (Throwable $e) {}
     $pdo->exec('PRAGMA synchronous = NORMAL');
-    vq_schema($pdo, $new);
+    if ($new) {
+        try { $pdo->exec('PRAGMA journal_mode = WAL'); } catch (Throwable $e) {}
+        vq_schema($pdo);
+    }
     return $pdo;
 }
 
-function vq_schema($db, $new) {
+function vq_schema($db) {
     $db->exec("CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT)");
     $db->exec("CREATE TABLE IF NOT EXISTS questions (id INTEGER PRIMARY KEY AUTOINCREMENT, sort INTEGER DEFAULT 0, mode TEXT NOT NULL, text TEXT NOT NULL, options TEXT DEFAULT '[]', answer TEXT DEFAULT 'null', extra TEXT DEFAULT '{}', image TEXT DEFAULT '', time_limit INTEGER DEFAULT 20, points INTEGER DEFAULT 1000, active INTEGER DEFAULT 1)");
     $db->exec("CREATE TABLE IF NOT EXISTS participants (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL, name TEXT NOT NULL, type TEXT DEFAULT 'solo', members TEXT DEFAULT '', avatar TEXT DEFAULT '', score INTEGER DEFAULT 0, streak INTEGER DEFAULT 0, best_streak INTEGER DEFAULT 0, correct_count INTEGER DEFAULT 0, joined REAL DEFAULT 0, last_seen REAL DEFAULT 0)");
     $db->exec("CREATE TABLE IF NOT EXISTS answers (id INTEGER PRIMARY KEY AUTOINCREMENT, round INTEGER, pid INTEGER, qid INTEGER, answer TEXT, correct INTEGER DEFAULT 0, points INTEGER DEFAULT 0, elapsed REAL DEFAULT 0, created REAL DEFAULT 0, UNIQUE(round, pid, qid))");
     $db->exec("CREATE TABLE IF NOT EXISTS game (id INTEGER PRIMARY KEY CHECK (id = 1), status TEXT DEFAULT 'lobby', round INTEGER DEFAULT 0, q_order TEXT DEFAULT '[]', q_index INTEGER DEFAULT 0, phase TEXT DEFAULT '', phase_started REAL DEFAULT 0, phase_ends REAL DEFAULT 0, started_at REAL DEFAULT 0, ended_at REAL DEFAULT 0)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_participants_score ON participants (score DESC, correct_count DESC, id ASC)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_participants_seen ON participants (last_seen)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_answers_round_qid ON answers (round, qid)");
     $db->exec("INSERT OR IGNORE INTO game (id) VALUES (1)");
     $st = $db->prepare("INSERT OR IGNORE INTO settings (k, v) VALUES (?, ?)");
     foreach (vq_default_settings() as $k => $v) $st->execute([$k, $v]);
-    if ($new) vq_seed_samples($db);
+    if ((int)$db->query("SELECT COUNT(*) FROM questions")->fetchColumn() === 0) vq_seed_samples($db);
 }
 
 function vq_default_settings() {
